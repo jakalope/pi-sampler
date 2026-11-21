@@ -49,6 +49,9 @@ button#panic:active { background: #a83a3a; }
 #vol-label { font-size: 15px; color: #9aa4b1; }
 scale trough { min-height: 14px; border-radius: 7px; background: #2a313b; border: none; }
 scale highlight { background: #1f6feb; border-radius: 7px; border: none; }
+scale:disabled trough { background: #2a313b; }
+scale:disabled highlight { background: #1f6feb; }
+scale:disabled slider { background: #e8eaed; }
 scale slider { min-width: 40px; min-height: 40px; border-radius: 20px; background: #e8eaed;
                border: none; box-shadow: none; background-image: none; }
 scrollbar { opacity: 0; }
@@ -131,29 +134,20 @@ class App(Gtk.Window):
             Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        # While the screen is dimmed an invisible sheet covers everything, so the
-        # touch that wakes the screen cannot also press whatever is underneath.
         self.backlight = Backlight()
         self.dimmed = False
+        self.waking = False          # True during the touch that woke the screen
         self._dim_timer = 0
-        self.shade = Gtk.EventBox()
-        self.shade.set_visible_window(False)
-        self.shade.set_above_child(True)
-        self.shade.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK
-                              | Gdk.EventMask.TOUCH_MASK)
-        self.shade.set_no_show_all(True)
-        self.shade.connect("button-press-event", lambda *_: True)
-        self.shade.connect("button-release-event", self.on_wake_touch_end)
-        self.shade.connect("touch-event", self.on_shade_touch)
-        layers = Gtk.Overlay()
-        layers.add(root)
-        layers.add_overlay(self.shade)
-        self.add(layers)
+        self.add(root)
         # Any touch anywhere counts as activity (watched on the way down, not consumed).
         self._activity = Gtk.GestureMultiPress.new(self)
         self._activity.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         self._activity.set_button(0)
-        self._activity.connect("pressed", lambda *_: self.touched())
+        self._activity.connect("pressed", self.on_press)
+        self._cursor_visible = None
+        self._mouse = Gtk.EventControllerMotion.new(self)
+        self._mouse.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        self._mouse.connect("motion", self.on_pointer_motion)
 
         # ---- header: active instrument + status
         header = Gtk.Box(spacing=12, name="header")
@@ -190,8 +184,8 @@ class App(Gtk.Window):
 
         pager = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, name="pager")
         self.up, self.down = up, down = Gtk.Button(label="▲"), Gtk.Button(label="▼")
-        up.connect("clicked", lambda *_: self.page(-1))
-        down.connect("clicked", lambda *_: self.page(1))
+        up.connect("clicked", lambda *_: self.waking or self.page(-1))
+        down.connect("clicked", lambda *_: self.waking or self.page(1))
         adj = self.scroller.get_vadjustment()
         adj.connect("changed", self.update_pager)
         adj.connect("value-changed", self.update_pager)
@@ -204,9 +198,9 @@ class App(Gtk.Window):
         # ---- footer: rescan, panic, volume
         footer = Gtk.Box(spacing=10, name="footer")
         rescan = Gtk.Button(label="Rescan")
-        rescan.connect("clicked", lambda *_: self.ctl.rescan())
+        rescan.connect("clicked", lambda *_: self.waking or self.ctl.rescan())
         panic = Gtk.Button(label="Panic", name="panic")
-        panic.connect("clicked", lambda *_: self.ctl.panic())
+        panic.connect("clicked", lambda *_: self.waking or self.ctl.panic())
         vol_label = Gtk.Label(label="Volume", name="vol-label")
         self.volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         self.volume.set_draw_value(False)
@@ -225,10 +219,42 @@ class App(Gtk.Window):
 
     # ---- events
     def on_realize(self, *_):
-        cursor = Gdk.Cursor.new_for_display(self.get_display(), Gdk.CursorType.BLANK_CURSOR)
+        self.show_cursor(False)
+
+    def show_cursor(self, visible):
+        """No pointer on a touchscreen; it appears only while a real mouse moves."""
+        if visible == self._cursor_visible or self.get_window() is None:
+            return
+        self._cursor_visible = visible
+        display = self.get_display()
+        cursor = (Gdk.Cursor.new_from_name(display, "default") if visible
+                  else Gdk.Cursor.new_for_display(display, Gdk.CursorType.BLANK_CURSOR))
         self.get_window().set_cursor(cursor)
 
+    def on_pointer_motion(self, *_):
+        event = Gtk.get_current_event()
+        device = event.get_source_device() if event else None
+        if device and device.get_source() in (Gdk.InputSource.MOUSE, Gdk.InputSource.TOUCHPAD,
+                                              Gdk.InputSource.TRACKPOINT):
+            self.show_cursor(True)
+            self.touched()
+
     # ---- screen dimming
+    def on_press(self, *_):
+        """Every touch starts here, before any button or row sees it."""
+        # A touch on a dimmed screen only wakes it: taps are ignored until the
+        # finger lifts, but swiping the list still scrolls.
+        self.waking = self.dimmed
+        if self.dimmed:
+            self.dimmed = False
+            self.backlight.set(False)
+            GLib.timeout_add(350, self._volume_usable)
+        self.touched()
+
+    def _volume_usable(self):
+        self.volume.set_sensitive(True)
+        return False
+
     def touched(self, *_):
         """Restart the idle countdown (called for every touch and scroll)."""
         if self._dim_timer:
@@ -240,23 +266,10 @@ class App(Gtk.Window):
     def dim(self):
         self._dim_timer = 0
         self.dimmed = True
-        self.shade.show()
+        self.volume.set_sensitive(False)     # so the waking touch cannot move the slider
+        self.show_cursor(False)
         self.backlight.set(True)
         return False
-
-    def on_shade_touch(self, _widget, event):
-        if event.type in (Gdk.EventType.TOUCH_END, Gdk.EventType.TOUCH_CANCEL):
-            self.on_wake_touch_end()
-        return True                                  # swallow the whole touch
-
-    def on_wake_touch_end(self, *_):
-        # Brighten when the finger lifts: only then is it safe to uncover the buttons.
-        if self.dimmed:
-            self.dimmed = False
-            self.backlight.set(False)
-            self.shade.hide()
-            self.touched()
-        return True
 
     def on_destroy(self, *_):
         self.backlight.set(False)
@@ -264,6 +277,8 @@ class App(Gtk.Window):
         Gtk.main_quit()
 
     def on_row(self, _listbox, row):
+        if self.waking:
+            return
         if row.inst is not None:
             self.ctl.select(row.inst.key)
             return
@@ -351,6 +366,9 @@ class App(Gtk.Window):
 
 
 def main():
+    # The compositor is given an invisible "default" cursor theme (see install.sh);
+    # the app itself uses a real one for when a mouse is plugged in.
+    Gtk.Settings.get_default().set_property("gtk-cursor-theme-name", "Adwaita")
     win = App()
     win.show_all()
     win.spinner.hide()

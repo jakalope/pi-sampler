@@ -139,6 +139,19 @@ install -m 755 "$SRC/scripts/pisampler-doctor" /usr/local/bin/pisampler-doctor
 install -d -o "$USER_NAME" -g "$USER_NAME" "$USER_HOME/instruments"
 install -d /media/usb
 
+# An invisible cursor theme for the kiosk compositor (the app shows a real
+# cursor by itself while a mouse is being moved).
+CUR=/usr/local/share/pisampler/cursors/default/cursors
+install -d "$CUR"
+python3 - "$CUR/default" <<'PY'
+import struct, sys
+image = struct.pack("<9I", 36, 0xfffd0002, 24, 1, 1, 1, 0, 0, 0) + struct.pack("<I", 0)   # 1x1 transparent
+open(sys.argv[1], "wb").write(b"Xcur" + struct.pack("<3I", 16, 0x10000, 1)
+                              + struct.pack("<3I", 0xfffd0002, 24, 28) + image)
+PY
+for n in left_ptr arrow top_left_arrow; do ln -sf default "$CUR/$n"; done
+apt-get install -y --no-install-recommends adwaita-icon-theme >/dev/null 2>&1 || true
+
 cat > /etc/pam.d/pisampler <<'PAM'
 auth     required  pam_unix.so nullok
 account  required  pam_unix.so

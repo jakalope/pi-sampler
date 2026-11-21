@@ -18,6 +18,8 @@ UtmpIdentifier=tty1
 UtmpMode=user
 EnvironmentFile=-/etc/default/pisampler
 Environment=GDK_BACKEND=wayland WLR_LIBINPUT_NO_DEVICES=1 NO_AT_BRIDGE=1
+# cage's own pointer comes from an invisible theme, so it never sits mid-screen
+Environment=XCURSOR_PATH=/usr/local/share/pisampler/cursors:/usr/share/icons
 ExecStart=/usr/bin/cage -- /usr/bin/python3 /opt/pisampler/ui.py
 # cage only starts once tty1 is the screen being shown
 ExecStartPost=+/usr/bin/chvt 1
