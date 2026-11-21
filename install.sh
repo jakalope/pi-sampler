@@ -243,6 +243,9 @@ fi
 say "Enabling services"
 systemctl daemon-reload
 systemctl disable getty@tty1.service >/dev/null 2>&1 || true
+# Never hold up boot waiting for Wi-Fi: the sampler works without a network,
+# and file sharing picks the network up whenever it appears.
+systemctl mask NetworkManager-wait-online.service systemd-networkd-wait-online.service >/dev/null 2>&1 || true
 systemctl disable pisampler-performance >/dev/null 2>&1 || true
 systemctl enable pisampler-jack pisampler-midi pisampler-gain pisampler-ui
 systemctl set-default graphical.target >/dev/null

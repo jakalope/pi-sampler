@@ -1,6 +1,11 @@
 [Unit]
 Description=PiSampler: touchscreen app (cage kiosk on tty1)
-After=systemd-user-sessions.service plymouth-quit-wait.service dbus.socket systemd-logind.service getty@tty1.service pisampler-jack.service
+# Deliberately not ordered after plymouth-quit-wait/rc-local/network-online:
+# the instrument must come up at once, with or without a network.
+After=systemd-user-sessions.service dbus.socket systemd-logind.service getty@tty1.service pisampler-jack.service
+# We dismiss the boot splash ourselves (ExecStartPre); the stock units must run
+# after that, or they hang up tty1 underneath cage.
+Before=plymouth-quit.service plymouth-quit-wait.service
 Wants=dbus.socket systemd-logind.service pisampler-jack.service pisampler-midi.service
 Conflicts=getty@tty1.service
 ConditionPathExists=/dev/tty0
@@ -20,6 +25,8 @@ EnvironmentFile=-/etc/default/pisampler
 Environment=GDK_BACKEND=wayland WLR_LIBINPUT_NO_DEVICES=1 NO_AT_BRIDGE=1
 # cage's own pointer comes from an invisible theme, so it never sits mid-screen
 Environment=XCURSOR_PATH=/usr/local/share/pisampler/cursors:/usr/share/icons
+# Make sure the boot splash has let go of the screen and tty1 before cage starts
+ExecStartPre=-+/bin/sh -c 'plymouth quit; plymouth --wait'
 ExecStart=/usr/bin/cage -- /usr/bin/python3 /opt/pisampler/ui.py
 # cage only starts once tty1 is the screen being shown
 ExecStartPost=+/usr/bin/chvt 1
