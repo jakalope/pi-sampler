@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """PiSampler touchscreen UI (GTK 3, 800x480, runs full-screen inside `cage`)."""
 
+import os
 import signal
 import socket
 import sys
@@ -53,6 +54,38 @@ scale slider { min-width: 40px; min-height: 40px; border-radius: 20px; backgroun
 scrollbar { opacity: 0; }
 """
 
+DIM_AFTER = float(os.environ.get("PISAMPLER_DIM_AFTER", "20"))      # seconds without a touch; 0 = never dim
+DIM_PERCENT = float(os.environ.get("PISAMPLER_DIM_PERCENT", "5"))  # brightness while dimmed
+
+
+class Backlight:
+    """The panel's backlight (writable by the 'video' group on Raspberry Pi OS)."""
+
+    def __init__(self):
+        dirs = sorted(Path("/sys/class/backlight").glob("*"))
+        self.file = dirs[0] / "brightness" if dirs else None
+        self.max = self._read(dirs[0] / "max_brightness", 255) if dirs else 255
+        self.dim_level = max(1, round(self.max * DIM_PERCENT / 100))
+        now = self._read(self.file, self.max) if dirs else self.max
+        # If we were stopped while dimmed, don't mistake the dim level for the normal one.
+        self.full = now if now > self.dim_level else self.max
+
+    @staticmethod
+    def _read(path, default):
+        try:
+            return int(Path(path).read_text())
+        except (OSError, ValueError):
+            return default
+
+    def set(self, dimmed):
+        if self.file is None:
+            return
+        try:
+            self.file.write_text(str(self.dim_level if dimmed else self.full))
+        except OSError:
+            pass
+
+
 EMPTY_TEXT = ("No instruments yet.\n\nCopy SFZ folders or SF2 files into the “instruments” "
               "share on  {host}  from your computer,\nor plug in a USB stick that has an "
               "“instruments” folder, then tap Rescan.")
@@ -98,7 +131,29 @@ class App(Gtk.Window):
             Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.add(root)
+        # While the screen is dimmed an invisible sheet covers everything, so the
+        # touch that wakes the screen cannot also press whatever is underneath.
+        self.backlight = Backlight()
+        self.dimmed = False
+        self._dim_timer = 0
+        self.shade = Gtk.EventBox()
+        self.shade.set_visible_window(False)
+        self.shade.set_above_child(True)
+        self.shade.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK
+                              | Gdk.EventMask.TOUCH_MASK)
+        self.shade.set_no_show_all(True)
+        self.shade.connect("button-press-event", lambda *_: True)
+        self.shade.connect("button-release-event", self.on_wake_touch_end)
+        self.shade.connect("touch-event", self.on_shade_touch)
+        layers = Gtk.Overlay()
+        layers.add(root)
+        layers.add_overlay(self.shade)
+        self.add(layers)
+        # Any touch anywhere counts as activity (watched on the way down, not consumed).
+        self._activity = Gtk.GestureMultiPress.new(self)
+        self._activity.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        self._activity.set_button(0)
+        self._activity.connect("pressed", lambda *_: self.touched())
 
         # ---- header: active instrument + status
         header = Gtk.Box(spacing=12, name="header")
@@ -140,6 +195,7 @@ class App(Gtk.Window):
         adj = self.scroller.get_vadjustment()
         adj.connect("changed", self.update_pager)
         adj.connect("value-changed", self.update_pager)
+        adj.connect("value-changed", self.touched)      # still scrolling = still in use
         pager.pack_start(up, True, True, 0)
         pager.pack_start(down, True, True, 0)
         middle.pack_end(pager, False, False, 0)
@@ -172,7 +228,38 @@ class App(Gtk.Window):
         cursor = Gdk.Cursor.new_for_display(self.get_display(), Gdk.CursorType.BLANK_CURSOR)
         self.get_window().set_cursor(cursor)
 
+    # ---- screen dimming
+    def touched(self, *_):
+        """Restart the idle countdown (called for every touch and scroll)."""
+        if self._dim_timer:
+            GLib.source_remove(self._dim_timer)
+            self._dim_timer = 0
+        if DIM_AFTER > 0 and not self.dimmed:
+            self._dim_timer = GLib.timeout_add(int(DIM_AFTER * 1000), self.dim)
+
+    def dim(self):
+        self._dim_timer = 0
+        self.dimmed = True
+        self.shade.show()
+        self.backlight.set(True)
+        return False
+
+    def on_shade_touch(self, _widget, event):
+        if event.type in (Gdk.EventType.TOUCH_END, Gdk.EventType.TOUCH_CANCEL):
+            self.on_wake_touch_end()
+        return True                                  # swallow the whole touch
+
+    def on_wake_touch_end(self, *_):
+        # Brighten when the finger lifts: only then is it safe to uncover the buttons.
+        if self.dimmed:
+            self.dimmed = False
+            self.backlight.set(False)
+            self.shade.hide()
+            self.touched()
+        return True
+
     def on_destroy(self, *_):
+        self.backlight.set(False)
         self.ctl.shutdown()
         Gtk.main_quit()
 
@@ -267,6 +354,8 @@ def main():
     win = App()
     win.show_all()
     win.spinner.hide()
+    win.backlight.set(False)
+    win.touched()
     win.update_pager(win.scroller.get_vadjustment())
     win.fullscreen()
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, win.destroy)

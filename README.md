@@ -82,6 +82,7 @@ the top line takes you back.
 - **▲ ▼** page through the list; you can also drag it with a finger.
 - **Rescan** looks for new instruments. **Panic** silences stuck notes. **Volume** sets the output level.
 - Top right shows **● piano name** when the piano is connected, **○ No piano** when not.
+- The screen dims after 20 seconds without a touch. The first touch only brightens it again; it doesn't press anything.
 - The last instrument is loaded again automatically when the Pi starts.
 - To switch off, simply unplug it (instrument files are only read, never written, while playing).
 
@@ -138,6 +139,6 @@ It checks the DAC, screen, touch, piano and software in order and marks what is 
   used only by the first three services above. The operating system, network, file sharing,
   the touchscreen app and all hardware interrupts are kept on cores 0–1, so nothing else can
   interrupt the sound. `pisampler-doctor` shows the split in section 5.
-- Settings (buffer size, voices) are in `/etc/default/pisampler`.
+- Settings (buffer size, voices, screen dimming) are in `/etc/default/pisampler`.
 - Everything restarts automatically if it crashes. Logs: `journalctl -u pisampler-ui -u pisampler-jack -u pisampler-engine -b`.
 - To undo the boot changes: restore `/boot/firmware/config.txt.pisampler-backup` and `cmdline.txt.pisampler-backup`.

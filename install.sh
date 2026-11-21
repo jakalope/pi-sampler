@@ -120,6 +120,9 @@ PISAMPLER_NPERIODS=2
 PISAMPLER_CARD=
 # Maximum simultaneous notes for SFZ instruments (lower it if a huge piano crackles).
 PISAMPLER_SFZ_VOICES=128
+# Screen: dim after this many seconds without a touch (0 = never), and how dim (percent).
+PISAMPLER_DIM_AFTER=20
+PISAMPLER_DIM_PERCENT=5
 DEF
 # A desktop sound server would grab the DAC; make sure none starts for this user.
 systemctl --global mask pipewire.service pipewire.socket pipewire-pulse.service \
@@ -189,9 +192,20 @@ cat > /etc/samba/pisampler.conf <<SMB
    force user = $USER_NAME
    create mask = 0644
    directory mask = 0755
-   veto files = /._*/.DS_Store/
-   delete veto files = yes
+   # Mac support: keep Finder metadata in extended attributes, not in extra files
+   # (without this, Finder copies fail with error -8062)
+   vfs objects = catia fruit streams_xattr
+   fruit:metadata = stream
+   fruit:model = MacSamba
+   fruit:posix_rename = yes
+   fruit:veto_appledouble = no
+   fruit:nfs_aces = no
+   fruit:wipe_intentionally_left_blank_rfork = yes
+   fruit:delete_empty_adfiles = yes
 SMB
+# Samba needs its log folder even on systems that keep /var/log in RAM.
+echo "d /var/log/samba 0755 root root -" > /etc/tmpfiles.d/pisampler-samba.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/pisampler-samba.conf
 grep -q 'pisampler.conf' /etc/samba/smb.conf || \
     printf '\n# PiSampler\ninclude = /etc/samba/pisampler.conf\n' >> /etc/samba/smb.conf
 grep -qiE '^\s*map to guest' /etc/samba/smb.conf || \
