@@ -1,0 +1,73 @@
+#!/usr/bin/python3
+"""Runs the sound engine described in /run/pisampler/engine.cmd (JSON: argv, optional SF2 preset).
+
+Both engines read commands from stdin and misbehave when it closes, so this
+keeps a pipe open to them, and turns systemd's stop signal into a clean "quit".
+"""
+import json
+import re
+import signal
+import subprocess
+import sys
+import time
+
+LOG = "/run/pisampler/engine.log"
+
+cmd = json.load(open("/run/pisampler/engine.cmd"))
+argv, preset = cmd["argv"], cmd.get("preset")
+child = subprocess.Popen(argv, stdin=subprocess.PIPE)
+
+
+def stop(*_):
+    try:
+        child.stdin.write(b"quit\n")
+        child.stdin.flush()
+    except OSError:
+        pass
+    try:
+        child.wait(1.5)
+    except subprocess.TimeoutExpired:
+        child.terminate()
+
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+
+
+def select_first_preset():
+    """Many soundfonts have no sound at the default slot (bank 0, program 0)
+    and would stay silent. Ask FluidSynth what the file contains and put its
+    first preset on every MIDI channel."""
+    child.stdin.write(b"inst 1\n")
+    child.stdin.flush()
+    presets = []
+    for _ in range(40):                                  # up to 10 s for huge files
+        time.sleep(0.25)
+        try:
+            text = open(LOG, errors="replace").read()
+        except OSError:
+            continue
+        presets = sorted((int(b), int(p)) for b, p in re.findall(r"^(?:> )?(\d{3})-(\d{3}) ", text, re.M))
+        if presets:
+            break
+    if not presets or presets[0] == (0, 0):
+        return                                           # default slot exists: nothing to do
+    melodic = [x for x in presets if x[0] < 128] or presets
+    bank, prog = melodic[0]
+    for ch in range(16):
+        child.stdin.write(b"select %d 1 %d %d\n" % (ch, bank, prog))
+    child.stdin.flush()
+    print(f"pisampler: selected preset {bank:03d}-{prog:03d} on all channels", flush=True)
+
+
+if "fluidsynth" in argv[0]:
+    try:
+        if preset:                                   # the app asked for one sound in the file
+            for ch in range(16):
+                child.stdin.write(b"select %d 1 %d %d\n" % (ch, preset[0], preset[1]))
+            child.stdin.flush()
+        else:
+            select_first_preset()
+    except OSError:
+        pass
+sys.exit(child.wait())

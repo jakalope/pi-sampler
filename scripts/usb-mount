@@ -1,0 +1,17 @@
+#!/bin/sh
+# Called by udev: mounts USB sticks read-only under /media/usb/<device>.
+# Read-only means pulling the stick out can never damage it.
+ACTION="$1"; DEV="$2"
+MNT="/media/usb/$DEV"
+case "$ACTION" in
+    add)
+        findmnt -rn -S "/dev/$DEV" >/dev/null 2>&1 && exit 0      # already mounted (boot disk)
+        mkdir -p "$MNT"
+        /usr/bin/systemd-mount --no-block --collect -o ro "/dev/$DEV" "$MNT"
+        ;;
+    remove)
+        /usr/bin/systemd-umount "$MNT" 2>/dev/null
+        rmdir "$MNT" 2>/dev/null
+        ;;
+esac
+exit 0

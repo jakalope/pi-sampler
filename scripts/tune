@@ -1,0 +1,29 @@
+#!/bin/sh
+# Runs as root just before JACK starts. Splits the Pi 5's four cores:
+#   CPUs 0-1  operating system, interrupts, network, the touchscreen app
+#   CPUs 2-3  only the MIDI -> synth -> DAC chain (pisampler.slice)
+OS_CPUS=0-1
+OS_MASK=3                      # hex bitmask for CPUs 0-1
+CG=/sys/fs/cgroup/pisampler.slice
+
+# Full speed, no frequency stepping.
+for g in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do
+    echo performance > "$g" 2>/dev/null
+done
+
+# Make the slice a real cpuset *partition*: the kernel then takes CPUs 2-3 away
+# from every other cgroup and gives them their own scheduling domain.
+if [ -e "$CG/cpuset.cpus.partition" ]; then
+    echo root > "$CG/cpuset.cpus.partition" 2>/dev/null
+    echo "pisampler: cpuset partition: $(cat "$CG/cpuset.cpus.partition") cpus=$(cat "$CG/cpuset.cpus.effective")"
+fi
+
+# Hardware interrupts (USB, network, SD card, display...) stay on the OS cores.
+echo "$OS_MASK" > /proc/irq/default_smp_affinity 2>/dev/null
+for f in /proc/irq/[0-9]*/smp_affinity_list; do
+    echo "$OS_CPUS" > "$f" 2>/dev/null
+done
+
+# Kernel background work queues too.
+echo "$OS_MASK" > /sys/devices/virtual/workqueue/cpumask 2>/dev/null
+exit 0

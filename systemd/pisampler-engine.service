@@ -1,0 +1,15 @@
+[Unit]
+Description=PiSampler: sound engine (sfizz or FluidSynth), started by the touchscreen app
+After=pisampler-jack.service
+
+[Service]
+User=@USER@
+Slice=pisampler.slice
+EnvironmentFile=-/etc/default/pisampler
+ExecStart=/usr/local/lib/pisampler/engine-run
+StandardOutput=truncate:/run/pisampler/engine.log
+StandardError=inherit
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+KillMode=mixed
+TimeoutStopSec=4

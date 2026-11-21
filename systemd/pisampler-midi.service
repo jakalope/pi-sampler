@@ -1,0 +1,16 @@
+[Unit]
+Description=PiSampler: USB MIDI -> JACK bridge (handles hot-plugging)
+After=pisampler-jack.service
+BindsTo=pisampler-jack.service
+
+[Service]
+User=@USER@
+Slice=pisampler.slice
+ExecStart=/usr/bin/a2jmidid -e
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=pisampler-jack.service

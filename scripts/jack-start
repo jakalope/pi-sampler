@@ -1,0 +1,33 @@
+#!/bin/sh
+# Starts JACK on the DAC HAT. Settings come from /etc/default/pisampler.
+PERIOD="${PISAMPLER_PERIOD:-128}"
+NPERIODS="${PISAMPLER_NPERIODS:-2}"
+RATE=48000
+
+find_card() {
+    # A card named in the settings wins. Otherwise: the first card that is not
+    # HDMI and not USB (the piano itself shows up as a USB sound card).
+    if [ -n "$PISAMPLER_CARD" ]; then echo "$PISAMPLER_CARD"; return; fi
+    for d in /proc/asound/card[0-9]*; do
+        [ -e "$d/usbid" ] && continue
+        [ -d "$d/pcm0p" ] || continue
+        id=$(cat "$d/id")
+        case "$id" in *hdmi*|*HDMI*) continue ;; esac
+        echo "$id"; return
+    done
+}
+
+i=0
+while [ $i -lt 30 ]; do
+    CARD=$(find_card)
+    [ -n "$CARD" ] && break
+    i=$((i + 1)); sleep 1
+done
+if [ -z "$CARD" ]; then
+    echo "pisampler: no DAC sound card found (check dtoverlay in /boot/firmware/config.txt)" >&2
+    exit 1
+fi
+
+echo "pisampler: JACK on hw:$CARD, $RATE Hz, $PERIOD frames x $NPERIODS"
+export JACK_NO_AUDIO_RESERVATION=1
+exec /usr/bin/jackd -R -P 80 -d alsa -d "hw:$CARD" -r "$RATE" -p "$PERIOD" -n "$NPERIODS" -o 2 -P

@@ -1,0 +1,67 @@
+#!/bin/bash
+# Checks every layer in order and says what is wrong. Run:  pisampler-doctor
+ok()   { printf '  \033[32mOK\033[0m    %s\n' "$*"; }
+bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; FAILS=$((FAILS + 1)); }
+note() { printf '        %s\n' "$*"; }
+FAILS=0
+U=$(systemctl show -p User --value pisampler-jack.service 2>/dev/null)
+asuser() { if [ "$(id -un)" = "$U" ] || [ -z "$U" ]; then "$@"; else sudo -u "$U" "$@"; fi; }
+
+echo "1. DAC"
+CARD=$(for d in /proc/asound/card[0-9]*; do [ -e "$d/usbid" ] && continue; [ -d "$d/pcm0p" ] || continue; grep -qi hdmi "$d/id" && continue; cat "$d/id"; break; done)
+if [ -n "$CARD" ]; then ok "sound card: $CARD"; aplay -l | grep '^card' | sed 's/^/        /'
+else bad "no DAC card. Overlay line in /boot/firmware/config.txt:"
+     note "$(grep -E '^dtoverlay=.*(dac|boss|hifiberry)' /boot/firmware/config.txt || echo '(none)')"
+     dmesg 2>/dev/null | grep -iE 'pcm512|boss|hifiberry' | tail -5 | sed 's/^/        /'; fi
+
+echo "2. Display and touch"
+if ls /sys/class/drm/ | grep -q 'DSI'; then
+    for c in /sys/class/drm/*DSI*; do
+        [ "$(cat "$c/status")" = connected ] && ok "$(basename "$c") connected, mode $(head -n1 "$c/modes")" \
+            || bad "$(basename "$c") not connected (check the ribbon cable)"; done
+else bad "no DSI display found (check the ribbon cable and display_auto_detect=1 in config.txt)"; fi
+TOUCH=$(grep -iE 'Name=.*(goodix|touch|ft5)' /proc/bus/input/devices | head -n1 | cut -d'"' -f2)
+[ -n "$TOUCH" ] && ok "touch controller: $TOUCH" || bad "no touch controller found"
+
+echo "3. MIDI"
+MIDI=$(aconnect -i 2>/dev/null | grep '^client' | grep -viE "System|Midi Through|a2j|pisampler" )
+[ -n "$MIDI" ] && ok "MIDI device: $(echo "$MIDI" | head -n1 | cut -d"'" -f2)" \
+    || bad "no USB MIDI device (piano on? USB cable in the piano's 'USB TO HOST' port?)"
+
+echo "4. Services"
+for s in pisampler-jack pisampler-midi pisampler-ui; do
+    systemctl is-active -q $s && ok "$s running" || { bad "$s not running"; \
+        journalctl -u $s -n 4 --no-pager 2>/dev/null | sed 's/^/        /'; }
+done
+
+echo "5. CPU partition (audio on CPUs 2-3, everything else on 0-1)"
+PART=$(cat /sys/fs/cgroup/pisampler.slice/cpuset.cpus.partition 2>/dev/null)
+[ "$PART" = root ] && ok "partition active, audio CPUs: $(cat /sys/fs/cgroup/pisampler.slice/cpuset.cpus.effective)" \
+    || bad "partition not active (${PART:-missing})"
+note "OS CPUs: $(cat /sys/fs/cgroup/system.slice/cpuset.cpus.effective 2>/dev/null)"
+for n in jackd a2jmidid sfizz_jack fluidsynth; do
+    for pid in $(pgrep -x $n); do note "$n runs on CPUs $(taskset -cp $pid 2>/dev/null | sed 's/.*: //')"; done
+done
+STRAY=$(for d in /proc/irq/[0-9]*; do n=${d##*/}; grep -q '[23]' "$d/effective_affinity_list" 2>/dev/null || continue
+    grep -E "^ *$n:" /proc/interrupts | grep -q arm-pmu && continue     # per-CPU profiling counters, never fire
+    printf '%s ' "$n"; done)
+[ -z "$STRAY" ] && ok "no interrupts land on the audio CPUs" || note "interrupts that the kernel keeps on CPUs 2-3: $STRAY"
+
+echo "6. Audio engine"
+if command -v jack_lsp >/dev/null; then
+    PORTS=$(asuser jack_lsp -c 2>/dev/null)
+    echo "$PORTS" | grep -q '^pisampler-engine:' && ok "engine loaded and connected:" || bad "no instrument loaded"
+    echo "$PORTS" | sed 's/^/        /'
+    XR=$(journalctl -u pisampler-jack -b --no-pager 2>/dev/null | grep -ci xrun)
+    [ "${XR:-0}" -eq 0 ] && ok "no dropouts (xruns) since boot" || note "dropouts (xruns) since boot: $XR"
+fi
+[ -f /run/pisampler/engine.log ] && { note "last engine messages:"; tail -n 4 /run/pisampler/engine.log | sed 's/^/          /'; }
+
+echo
+[ $FAILS -eq 0 ] && echo "Everything looks fine." || echo "$FAILS problem(s) found - see FAIL lines above."
+echo "Sound test (plays a tone through the DAC, stops the sampler for 5 s):  pisampler-doctor tone"
+if [ "$1" = tone ] && [ -n "$CARD" ]; then
+    sudo systemctl stop pisampler-ui pisampler-midi pisampler-jack
+    timeout 5 speaker-test -D "plughw:$CARD" -c 2 -r 48000 -t sine -f 440 >/dev/null
+    sudo systemctl start pisampler-jack pisampler-midi pisampler-ui
+fi

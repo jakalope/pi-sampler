@@ -1,0 +1,18 @@
+[Unit]
+Description=PiSampler: JACK audio server on the DAC HAT
+After=sound.target
+
+[Service]
+User=@USER@
+Slice=pisampler.slice
+# '+' = as root: CPU partition, interrupt placement, CPU governor
+ExecStartPre=+/usr/local/lib/pisampler/tune
+EnvironmentFile=-/etc/default/pisampler
+ExecStart=/usr/local/lib/pisampler/jack-start
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

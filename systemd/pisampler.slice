@@ -1,0 +1,6 @@
+[Unit]
+Description=PiSampler realtime partition (CPUs 2-3: JACK, MIDI bridge, sound engine)
+Before=slices.target
+
+[Slice]
+AllowedCPUs=2-3
