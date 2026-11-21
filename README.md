@@ -68,8 +68,8 @@ you use them. Use a blue USB 3 port for big pianos.
 
 | Library | What it is | Get it from | Put it in |
 |---|---|---|---|
-| **Salamander Grand Piano** | Yamaha C5 grand, 16 velocity layers, about 1–2 GB. The best free piano. | sfzinstruments.github.io/pianos/salamander | `instruments/Salamander/` (whole folder) |
-| **VSCO 2 Community Edition** | Orchestra: strings, brass, woodwinds, percussion, harp, organ. About 3 GB. | github.com/sfzinstruments/VSCO-2-CE (green **Code** button → Download ZIP) | `instruments/VSCO/` (whole folder) |
+| **Salamander Grand Piano** | Yamaha C5 grand, 16 velocity layers, under 1 GB. The best free piano. | github.com/sfzinstruments/SalamanderGrandPiano (green **Code** button → Download ZIP) | `instruments/Salamander/` (whole folder) |
+| **VSCO 2 Community Edition** | Orchestra: strings, brass, woodwinds, percussion, harp, organ. About 2.5 GB. | github.com/sgossner/VSCO-2-CE (green **Code** button → Download ZIP) | `instruments/VSCO/` (whole folder) |
 | **GeneralUser GS** | One 30 MB SF2 file with a bit of everything: electric pianos, organs, strings, guitars. | schristiancollins.com/generaluser.php | `instruments/GeneralUser-GS.sf2` |
 
 A file or library that holds several sounds shows as a **folder** (for example
