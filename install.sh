@@ -200,6 +200,13 @@ testparm -s >/dev/null 2>&1 || die "Samba configuration is invalid (run: testpar
 systemctl enable smbd nmbd avahi-daemon >/dev/null 2>&1 || true
 systemctl restart smbd 2>/dev/null || true
 
+# ------------------------------------------------------------------ Wi-Fi
+# The Pi's Wi-Fi power saving drops packets and makes the file share crawl.
+if [ -d /etc/NetworkManager/conf.d ]; then
+    say "Turning off Wi-Fi power saving"
+    printf '[connection]\nwifi.powersave = 2\n' > /etc/NetworkManager/conf.d/pisampler-wifi-powersave.conf
+fi
+
 # ------------------------------------------------------------------ services
 say "Enabling services"
 systemctl daemon-reload

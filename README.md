@@ -123,6 +123,8 @@ It checks the DAC, screen, touch, piano and software in order and marks what is 
 - If it is plugged into the Pi's other display socket, try `sudo DSI_OVERLAY=vc4-kms-dsi-7inch,dsi0 ./install.sh` and reboot.
 - Picture but no touch: reseat the cable; touch travels over the same cable.
 
+**Network share is slow, or the Pi drops off the network** – the Wi-Fi signal at the Pi is weak. Move it or the router closer, or use a network cable; a cable is also much faster for multi-GB libraries.
+
 **An instrument shows an error** – the SFZ file probably can't find its samples: copy the whole library folder again, keeping its internal layout.
 
 ## How it's put together (for the curious)
