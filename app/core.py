@@ -26,6 +26,13 @@ RUN_DIR = Path(os.environ.get("PISAMPLER_RUN_DIR", "/run/pisampler"))   # tmpfs,
 ENGINE_LOG = RUN_DIR / "engine.log"
 ENGINE_CMD = RUN_DIR / "engine.cmd"
 ENGINE_UNIT = "pisampler-engine.service"
+GAIN_CLIENT = "pisampler-out"        # the gain stage (src/pisampler-gain.c)
+GAIN_FIFO = RUN_DIR / "gain"
+LOUDNESS_FILE = STATE_FILE.parent / "loudness.json"
+# Loudness matching: every instrument is scaled so that its loudest single note
+# peaks at this level (dB below digital full scale). The gap is the room left
+# for many notes sounding together. "off" disables it.
+NORMALIZE_DB = os.environ.get("PISAMPLER_NORMALIZE_DB", "-12").strip().lower()
 
 ENGINE_CLIENT = "pisampler-engine"   # JACK client name used by whichever engine runs
 SFZ_VOICES = os.environ.get("PISAMPLER_SFZ_VOICES", "128")
@@ -276,8 +283,12 @@ class JackLink:
                 raise JackDown(str(e))
         return self._client
 
-    def sync(self) -> tuple[bool, list[str]]:
-        """Make all wanted connections. Returns (engine_ready, midi_device_names)."""
+    def sync(self, open_engine: bool = True) -> tuple[bool, list[str], bool]:
+        """Make all wanted connections.
+
+        The engine is only wired to the piano and the output when open_engine is
+        true (it is kept apart while its loudness is being measured).
+        Returns (engine_ready, midi_device_names, gain_stage_present)."""
         c = self._get()
         try:
             playback = c.get_ports(is_audio=True, is_input=True, is_physical=True)
@@ -286,23 +297,91 @@ class JackLink:
             prefix = "^" + re.escape(ENGINE_CLIENT) + ":"
             eng_out = c.get_ports(prefix, is_audio=True, is_output=True)
             eng_midi = c.get_ports(prefix, is_midi=True, is_input=True)
+            gprefix = "^" + re.escape(GAIN_CLIENT) + ":"
+            gain_in = c.get_ports(gprefix, is_audio=True, is_input=True)
+            gain_out = c.get_ports(gprefix, is_audio=True, is_output=True)
+            has_gain = len(gain_in) >= 2 and len(gain_out) >= 2
             sources = [p for p in c.get_ports(is_midi=True, is_output=True)
                        if not p.name.startswith(("pisampler", ENGINE_CLIENT))
                        and "through" not in p.name.lower()]
-            for src, dst in zip(eng_out, playback):
-                self._connect(c, src, dst)
-            if len(eng_out) == 1 and len(playback) > 1:     # mono engine -> both sides
-                self._connect(c, eng_out[0], playback[1])
-            for src in sources:
-                for dst in eng_midi:
+            if has_gain:
+                for src, dst in zip(gain_out, playback):
                     self._connect(c, src, dst)
-            return bool(eng_out and eng_midi), sorted({_device_name(p.name) for p in sources})
+            if open_engine:
+                dest = gain_in if has_gain else playback
+                for src, dst in zip(eng_out, dest):
+                    self._connect(c, src, dst)
+                if len(eng_out) == 1 and len(dest) > 1:      # mono engine -> both sides
+                    self._connect(c, eng_out[0], dest[1])
+                for src in sources:
+                    for dst in eng_midi:
+                        self._connect(c, src, dst)
+            return (bool(eng_out and eng_midi),
+                    sorted({_device_name(p.name) for p in sources}), has_gain)
         except JackDown:
             self.close()
             raise
         except Exception as e:
             self.close()
             raise JackDown(str(e))
+
+    def measure_peak(self, aborted=lambda: False) -> float | None:
+        """Play the loudest note (velocity 127) on keys across the whole range,
+        with the engine heard only by us, and return the highest sample peak."""
+        try:
+            import jack
+            c = jack.Client("pisampler-measure", no_start_server=True)
+        except Exception:
+            return None
+        try:
+            out = c.midi_outports.register("out")
+            ins = [c.inports.register("in_1"), c.inports.register("in_2")]
+            pending: list[bytes] = []
+            peak = [0.0]
+
+            @c.set_process_callback
+            def _process(frames):
+                out.clear_buffer()
+                while pending:
+                    try:
+                        out.write_midi_event(0, pending[0])
+                    except Exception:
+                        break
+                    pending.pop(0)
+                for port in ins:
+                    buf = memoryview(port.get_buffer()).cast("f")
+                    if len(buf):
+                        peak[0] = max(peak[0], max(buf), -min(buf))
+
+            prefix = "^" + re.escape(ENGINE_CLIENT) + ":"
+            eng_midi = c.get_ports(prefix, is_midi=True, is_input=True)
+            eng_out = c.get_ports(prefix, is_audio=True, is_output=True)
+            if not eng_midi or not eng_out:
+                return None
+            c.activate()
+            c.connect(out, eng_midi[0])
+            for src, dst in zip(eng_out, ins):
+                c.connect(src, dst)
+            time.sleep(0.1)
+            for note in range(24, 109, 4):                   # C1 .. C8, every major third
+                if aborted():
+                    return None
+                pending.append(bytes((0x90, note, 127)))
+                time.sleep(0.25)
+                pending.append(bytes((0x80, note, 0)))
+                pending.append(bytes((0xB0, 120, 0)))         # all sound off: no overlapping tails
+                time.sleep(0.04)
+            pending.append(bytes((0xB0, 123, 0)))
+            time.sleep(0.15)
+            c.deactivate()
+            return peak[0]
+        except Exception:
+            return None
+        finally:
+            try:
+                c.close()
+            except Exception:
+                pass
 
     @staticmethod
     def _connect(c, src, dst):
@@ -363,6 +442,61 @@ def _device_name(port: str) -> str:
     # a2jmidid names ports like "a2j:Digital Piano [20] (capture): Digital Piano MIDI 1"
     m = re.match(r"a2j:(.+?) (?:\[\d+\] )?\((?:capture|playback)\)", port)
     return m.group(1) if m else port.split(":", 1)[-1]
+
+
+# ----------------------------------------------------------------- loudness
+
+def normalize_target() -> float | None:
+    """Wanted peak of the loudest single note as a linear level, or None if off."""
+    try:
+        return 10 ** (float(NORMALIZE_DB) / 20)
+    except ValueError:
+        return None
+
+
+def set_gain(gain: float) -> bool:
+    try:
+        fd = os.open(GAIN_FIFO, os.O_WRONLY | os.O_NONBLOCK)
+        try:
+            os.write(fd, f"{gain:.5f}\n".encode())
+        finally:
+            os.close(fd)
+        return True
+    except OSError:
+        return False
+
+
+def _file_tag(inst: "Instrument") -> list:
+    try:
+        st = os.stat(inst.path)
+        return [st.st_mtime_ns, st.st_size]
+    except OSError:
+        return []
+
+
+def cached_peak(inst: "Instrument") -> float | None:
+    try:
+        entry = json.loads(LOUDNESS_FILE.read_text()).get(inst.key)
+    except (OSError, ValueError):
+        return None
+    if entry and entry.get("file") == _file_tag(inst):
+        return float(entry["peak"])
+    return None
+
+
+def remember_peak(inst: "Instrument", peak: float) -> None:
+    try:
+        data = json.loads(LOUDNESS_FILE.read_text())
+    except (OSError, ValueError):
+        data = {}
+    data[inst.key] = {"peak": round(peak, 6), "file": _file_tag(inst)}
+    try:
+        LOUDNESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = LOUDNESS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=1))
+        os.replace(tmp, LOUDNESS_FILE)
+    except OSError:
+        pass
 
 
 # ------------------------------------------------------------------- engine
@@ -463,6 +597,7 @@ class Controller:
         self._failures = 0
         self._ready_since = 0.0
         self._ports_since = 0.0
+        self._open = True            # engine wired to piano and output?
         self._usb_seen: tuple = ()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -506,6 +641,7 @@ class Controller:
             return
         self._ready_since = 0.0
         self._ports_since = 0.0
+        self._open = normalize_target() is None      # stay closed until loudness is matched
         self._set(active=inst.key, active_name=inst.title, status="loading", message="")
         try:
             self._engine.start(inst)
@@ -570,6 +706,23 @@ class Controller:
 
             self._tick()
 
+    def _match_loudness(self) -> bool:
+        """Set the output gain for the loaded instrument. False if interrupted."""
+        inst, target = self._wanted, normalize_target()
+        peak = cached_peak(inst)
+        if peak is None:
+            self._set(status="loading", message="Matching loudness…")
+            peak = self._jack.measure_peak(aborted=lambda: not self._q.empty())
+            if peak is None:
+                if not self._q.empty():
+                    return False
+                peak = 0.0                   # could not measure: leave the level alone
+            else:
+                remember_peak(inst, peak)
+        gain = min(32.0, target / peak) if peak > 0.001 else 1.0
+        set_gain(gain)
+        return True
+
     def _tick(self):
         # USB stick plugged in or removed -> refresh the list by itself.
         usb_now = tuple(str(p) for p in usb_instrument_dirs())
@@ -577,7 +730,7 @@ class Controller:
             self._rescan()
 
         try:
-            ready, midi = self._jack.sync()
+            ready, midi, has_gain = self._jack.sync(self._open)
         except JackDown:
             # An engine cannot survive without its audio server; drop it now and
             # it is started again as soon as JACK is back.
@@ -621,6 +774,15 @@ class Controller:
                 return
             self._ports_since = self._ports_since or time.monotonic()
             if "Instrument loaded" not in log and time.monotonic() - self._ports_since < 30:
+                return
+
+        if ready and not self._open:
+            if has_gain and not self._match_loudness():
+                return                       # interrupted by a new command; it takes over
+            self._open = True
+            try:
+                self._jack.sync(True)
+            except JackDown:
                 return
 
         if ready:

@@ -29,7 +29,7 @@ MIDI=$(aconnect -i 2>/dev/null | grep '^client' | grep -viE "System|Midi Through
     || bad "no USB MIDI device (piano on? USB cable in the piano's 'USB TO HOST' port?)"
 
 echo "4. Services"
-for s in pisampler-jack pisampler-midi pisampler-ui; do
+for s in pisampler-jack pisampler-midi pisampler-gain pisampler-ui; do
     systemctl is-active -q $s && ok "$s running" || { bad "$s not running"; \
         journalctl -u $s -n 4 --no-pager 2>/dev/null | sed 's/^/        /'; }
 done
@@ -52,7 +52,10 @@ if command -v jack_lsp >/dev/null; then
     PORTS=$(asuser jack_lsp -c 2>/dev/null)
     echo "$PORTS" | grep -q '^pisampler-engine:' && ok "engine loaded and connected:" || bad "no instrument loaded"
     echo "$PORTS" | sed 's/^/        /'
-    XR=$(journalctl -u pisampler-jack -b --no-pager 2>/dev/null | grep -ci xrun)
+    # Late cycles during the silent loudness measurement are not audible: skip those seconds.
+    XR=$(journalctl -u pisampler-jack -b --no-pager 2>/dev/null | grep -i xrun | awk '
+        { t[NR] = $3; if ($0 ~ /pisampler-measure/) skip[$3] = 1 }
+        END { n = 0; for (i = 1; i <= NR; i++) if (!(t[i] in skip)) n++; print n }')
     [ "${XR:-0}" -eq 0 ] && ok "no dropouts (xruns) since boot" || note "dropouts (xruns) since boot: $XR"
 fi
 [ -f /run/pisampler/engine.log ] && { note "last engine messages:"; tail -n 4 /run/pisampler/engine.log | sed 's/^/          /'; }

@@ -82,6 +82,7 @@ the top line takes you back.
 - **▲ ▼** page through the list; you can also drag it with a finger.
 - **Rescan** looks for new instruments. **Panic** silences stuck notes. **Volume** sets the output level.
 - Top right shows **● piano name** when the piano is connected, **○ No piano** when not.
+- **Loudness is matched automatically.** The first time an instrument is loaded it shows "Matching loudness…" for a few seconds while it is measured (silently); after that every instrument plays at the same level.
 - The screen dims after 20 seconds without a touch. The first touch only brightens it again; it doesn't press anything.
 - The last instrument is loaded again automatically when the Pi starts.
 - To switch off, simply unplug it (instrument files are only read, never written, while playing).
@@ -110,6 +111,7 @@ It checks the DAC, screen, touch, piano and software in order and marks what is 
 
 **Crackles or dropouts**
 - Edit the settings file with `sudo nano /etc/default/pisampler`, change `PISAMPLER_NPERIODS=2` to `3`, save, reboot. If still crackling, set `PISAMPLER_PERIOD=256`.
+- Distortion only on big, loud chords: lower the loudness target in the same file, e.g. `PISAMPLER_NORMALIZE_DB=-15`, and turn your amplifier up instead.
 - Use the official 27 W Pi 5 power supply and a fast SD card (A2 class).
 
 **Piano not detected ("○ No piano")**
@@ -133,12 +135,13 @@ It checks the DAC, screen, touch, piano and software in order and marks what is 
 - `pisampler-jack` – JACK2 audio server on the DAC at 48 kHz, 128-frame buffer × 2 (about 5 ms).
 - `pisampler-midi` – `a2jmidid`, which makes the USB piano appear in JACK and copes with hot-plugging.
 - `pisampler-engine` – the sound engine: **sfizz** for SFZ or **FluidSynth** for SF2/SF3. The app starts and stops it.
+- `pisampler-gain` – a tiny gain stage (`src/pisampler-gain.c`) between engine and DAC. Each instrument's loudest single note is scaled to −12 dB below full scale, leaving room for chords.
 - `pisampler-ui` – the touchscreen app (`/opt/pisampler`, Python + GTK) inside the `cage` kiosk compositor.
   It wires piano → engine → DAC and re-checks the wiring every half second.
 - **CPU split.** The Pi 5 has four cores. Cores 2–3 are a kernel cpuset partition (`pisampler.slice`)
   used only by the first three services above. The operating system, network, file sharing,
   the touchscreen app and all hardware interrupts are kept on cores 0–1, so nothing else can
   interrupt the sound. `pisampler-doctor` shows the split in section 5.
-- Settings (buffer size, voices, screen dimming) are in `/etc/default/pisampler`.
+- Settings (buffer size, voices, loudness target, screen dimming) are in `/etc/default/pisampler`.
 - Everything restarts automatically if it crashes. Logs: `journalctl -u pisampler-ui -u pisampler-jack -u pisampler-engine -b`.
 - To undo the boot changes: restore `/boot/firmware/config.txt.pisampler-backup` and `cmdline.txt.pisampler-backup`.

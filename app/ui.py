@@ -345,7 +345,7 @@ class App(Gtk.Window):
         self.spinner.set_visible(loading)
         (self.spinner.start if loading else self.spinner.stop)()
 
-        text = {"loading": "Loading…", "ready": "", "idle": ""}.get(snap.status, snap.message)
+        text = snap.message or {"loading": "Loading…"}.get(snap.status, "")
         self.status.set_text(text)
         sctx = self.status.get_style_context()
         (sctx.add_class if snap.status in ("error", "noaudio") else sctx.remove_class)("error")

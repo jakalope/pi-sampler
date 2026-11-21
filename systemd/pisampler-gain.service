@@ -1,0 +1,16 @@
+[Unit]
+Description=PiSampler: output gain stage (loudness matching between instruments)
+After=pisampler-jack.service
+BindsTo=pisampler-jack.service
+
+[Service]
+User=@USER@
+Slice=pisampler.slice
+ExecStart=/usr/local/lib/pisampler/pisampler-gain /run/pisampler/gain
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=pisampler-jack.service

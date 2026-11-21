@@ -33,7 +33,7 @@ apt-get update
 apt-get install -y --no-install-recommends \
     jackd2 a2jmidid fluidsynth alsa-utils \
     sudo cage python3 python3-gi gir1.2-gtk-3.0 python3-jack-client fonts-dejavu-core \
-    samba avahi-daemon coreutils util-linux
+    samba avahi-daemon coreutils util-linux gcc libc6-dev libjack-jackd2-dev
 apt-get install -y --no-install-recommends jack-example-tools 2>/dev/null || true   # jack_lsp, for the doctor
 apt-get install -y --no-install-recommends fonts-inter 2>/dev/null || true
 
@@ -120,6 +120,9 @@ PISAMPLER_NPERIODS=2
 PISAMPLER_CARD=
 # Maximum simultaneous notes for SFZ instruments (lower it if a huge piano crackles).
 PISAMPLER_SFZ_VOICES=128
+# Loudness matching: the loudest single note of every instrument is set to this
+# level (dB below full scale). Lower (e.g. -15) if dense chords distort, "off" to disable.
+PISAMPLER_NORMALIZE_DB=-12
 # Screen: dim after this many seconds without a touch (0 = never), and how dim (percent).
 PISAMPLER_DIM_AFTER=20
 PISAMPLER_DIM_PERCENT=5
@@ -136,6 +139,8 @@ install -m 644 "$SRC/app/core.py" "$SRC/app/ui.py" /opt/pisampler/
 install -m 755 "$SRC/scripts/jack-start" "$SRC/scripts/usb-mount" "$SRC/scripts/engine-run" \
     "$SRC/scripts/tune" /usr/local/lib/pisampler/
 install -m 755 "$SRC/scripts/pisampler-doctor" /usr/local/bin/pisampler-doctor
+gcc -O2 -o /usr/local/lib/pisampler/pisampler-gain "$SRC/src/pisampler-gain.c" -ljack \
+    || die "could not build the gain stage (src/pisampler-gain.c)"
 install -d -o "$USER_NAME" -g "$USER_NAME" "$USER_HOME/instruments"
 install -d /media/usb
 
@@ -239,7 +244,7 @@ say "Enabling services"
 systemctl daemon-reload
 systemctl disable getty@tty1.service >/dev/null 2>&1 || true
 systemctl disable pisampler-performance >/dev/null 2>&1 || true
-systemctl enable pisampler-jack pisampler-midi pisampler-ui
+systemctl enable pisampler-jack pisampler-midi pisampler-gain pisampler-ui
 systemctl set-default graphical.target >/dev/null
 
 HOST="$(hostname)"
