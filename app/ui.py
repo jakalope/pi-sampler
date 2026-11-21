@@ -136,7 +136,6 @@ class App(Gtk.Window):
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.backlight = Backlight()
         self.dimmed = False
-        self.waking = False          # True during the touch that woke the screen
         self._dim_timer = 0
         self.add(root)
         # Any touch anywhere counts as activity (watched on the way down, not consumed).
@@ -184,8 +183,8 @@ class App(Gtk.Window):
 
         pager = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, name="pager")
         self.up, self.down = up, down = Gtk.Button(label="▲"), Gtk.Button(label="▼")
-        up.connect("clicked", lambda *_: self.waking or self.page(-1))
-        down.connect("clicked", lambda *_: self.waking or self.page(1))
+        up.connect("clicked", lambda *_: self.page(-1))
+        down.connect("clicked", lambda *_: self.page(1))
         adj = self.scroller.get_vadjustment()
         adj.connect("changed", self.update_pager)
         adj.connect("value-changed", self.update_pager)
@@ -198,9 +197,9 @@ class App(Gtk.Window):
         # ---- footer: rescan, panic, volume
         footer = Gtk.Box(spacing=10, name="footer")
         rescan = Gtk.Button(label="Rescan")
-        rescan.connect("clicked", lambda *_: self.waking or self.ctl.rescan())
+        rescan.connect("clicked", lambda *_: self.ctl.rescan())
         panic = Gtk.Button(label="Panic", name="panic")
-        panic.connect("clicked", lambda *_: self.waking or self.ctl.panic())
+        panic.connect("clicked", lambda *_: self.ctl.panic())
         vol_label = Gtk.Label(label="Volume", name="vol-label")
         self.volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         self.volume.set_draw_value(False)
@@ -242,18 +241,12 @@ class App(Gtk.Window):
     # ---- screen dimming
     def on_press(self, *_):
         """Every touch starts here, before any button or row sees it."""
-        # A touch on a dimmed screen only wakes it: taps are ignored until the
-        # finger lifts, but swiping the list still scrolls.
-        self.waking = self.dimmed
+        # A dimmed screen is still readable, so the touch that brightens it
+        # also does whatever it landed on.
         if self.dimmed:
             self.dimmed = False
             self.backlight.set(False)
-            GLib.timeout_add(350, self._volume_usable)
         self.touched()
-
-    def _volume_usable(self):
-        self.volume.set_sensitive(True)
-        return False
 
     def touched(self, *_):
         """Restart the idle countdown (called for every touch and scroll)."""
@@ -266,7 +259,6 @@ class App(Gtk.Window):
     def dim(self):
         self._dim_timer = 0
         self.dimmed = True
-        self.volume.set_sensitive(False)     # so the waking touch cannot move the slider
         self.show_cursor(False)
         self.backlight.set(True)
         return False
@@ -277,8 +269,6 @@ class App(Gtk.Window):
         Gtk.main_quit()
 
     def on_row(self, _listbox, row):
-        if self.waking:
-            return
         if row.inst is not None:
             self.ctl.select(row.inst.key)
             return

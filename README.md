@@ -83,7 +83,7 @@ the top line takes you back.
 - **Rescan** looks for new instruments. **Panic** silences stuck notes. **Volume** sets the output level.
 - Top right shows **● piano name** when the piano is connected, **○ No piano** when not.
 - **Loudness is matched automatically.** The first time an instrument is loaded it shows "Matching loudness…" for a few seconds while it is measured (silently); after that every instrument plays at the same level.
-- The screen dims after 20 seconds without a touch. The first touch only brightens it again; it doesn't press anything.
+- The screen dims after 20 seconds without a touch. It stays usable while dim: any touch brightens it and works as normal.
 - The last instrument is loaded again automatically when the Pi starts.
 - To switch off, simply unplug it (instrument files are only read, never written, while playing).
 
